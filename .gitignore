@@ -1,0 +1,11 @@
+target/
+*.log
+data/
+.idea/
+*.iml
+*.part
+downloads/
+work/
+docs/
+outputs/
+src/test/
