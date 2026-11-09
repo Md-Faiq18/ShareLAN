@@ -4,7 +4,7 @@
 
 ## Features
 
-- Prominent **Send files** and **Receive files** actions.
+- Prominent **Send files** and **Receive files** actions on the Overview.
 - Automatic peer discovery, with manual IP address and port as a fallback.
 - Bidirectional file sharing: either computer can send or receive.
 - Live progress and transfer speed on both sender and receiver screens.
@@ -22,10 +22,10 @@ java -jar target/lan-file-sharing-1.0.0.jar
 ```
 
 1. Connect both computers to the **same Wi-Fi network**. The router must allow devices to communicate with one another.
-2. On the receiving computer, open ShareLAN and click **Receive files** or **Start receiving**.
-3. On the sending computer, open **Send files**, click **Find devices**, select the receiver, and click **Connect to selected device**.
-4. Click **Choose a file**. Both computers display transfer progress and speed. Received files are saved to `downloads/` by default.
-5. To transfer in the other direction, start receiving on the other computer and repeat the send steps.
+2. On the receiving computer, click **Receive files** on the Overview to start its receiver.
+3. On the sending computer, click **Send files**. ShareLAN starts searching; select the receiver and click **Connect**.
+4. After the connection confirmation, click **Choose a file**. Both computers show progress and speed on the Overview. Received files are saved to `downloads/` by default.
+5. To send in the other direction, start receiving on the other computer and repeat.
 
 ## How it works
 
@@ -39,7 +39,7 @@ flowchart LR
     Workers --> History[CSV history]
 ```
 
-Peers discover one another with UDP broadcast on port `5051`. Files travel over TCP, normally on port `5050`. The sender sends the filename and file size, waits for the receiver to approve, streams the bytes in buffered chunks, and waits for the receiver's completion reply. The sender and receiver each display progress and average speed.
+Peers discover one another with UDP broadcast on port `5051`. Files travel over TCP, normally on port `5050`. The sender sends the filename and file size, waits for the receiver to approve, streams the bytes in buffered chunks, and waits for the receiver's completion reply. The sender and receiver each display progress and average speed on the Overview. Completed sends and receives are recorded in local CSV history.
 
 File transfer does not require Internet access, but both computers must have a local network connection that lets them communicate. A Wi-Fi network with client isolation enabled may block discovery or transfers.
 

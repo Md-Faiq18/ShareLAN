@@ -9,13 +9,18 @@ import com.lanshare.util.FileValidator;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.JTableHeader;
 import javax.swing.DefaultListModel;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -28,12 +33,13 @@ public class Main extends JFrame {
     private static final Color BACKGROUND = new Color(245, 247, 251);
     private static final Color BLUE = new Color(72, 102, 230);
     private static final Color GREEN = new Color(34, 166, 120);
+    private static final DateTimeFormatter HISTORY_DATE =
+            DateTimeFormatter.ofPattern("MMM d, yyyy  h:mm a").withZone(ZoneId.systemDefault());
 
     private final CardLayout pageLayout = new CardLayout();
     private final JPanel pages = new JPanel(pageLayout);
     private final JLabel pageTitle = new JLabel("Overview");
     private final JLabel status = new JLabel("Receiver stopped");
-    private final JLabel receiverPageStatus = new JLabel("Receiver stopped");
     private final JLabel receiverOverview = new JLabel("Start receiving to accept files");
     private final JLabel clientCount = new JLabel("0");
     private final JLabel fileTotal = new JLabel("0");
@@ -45,13 +51,17 @@ public class Main extends JFrame {
     private final JLabel receiveMessage = new JLabel("Waiting for an incoming file");
     private final JProgressBar receiveProgress = new JProgressBar(0, 100);
     private volatile long receiveStartedAt;
-    private final JTextField host = new JTextField("127.0.0.1");
+    private final JTextField host = new JTextField();
     private final JTextField port = new JTextField("5050");
     private final DefaultListModel<LanDiscovery.Device> deviceModel = new DefaultListModel<>();
     private final JList<LanDiscovery.Device> deviceList = new JList<>(deviceModel);
+    private JPanel sendWorkflow;
+    private JButton scanButton;
+    private JButton connectButton;
+    private JButton chooseFileButton;
     private final JTextArea activity = new JTextArea();
     private final DefaultTableModel historyRows = new DefaultTableModel(
-            new Object[]{"File", "Sender", "Size", "Received"}, 0) {
+            new Object[]{"File", "Direction", "Device", "Size", "Date", "Result"}, 0) {
         @Override public boolean isCellEditable(int row, int column) { return false; }
     };
     private final Path historyFile = Path.of("data", "history.csv");
@@ -94,8 +104,6 @@ public class Main extends JFrame {
         brand.setBorder(new EmptyBorder(2, 10, 34, 0));
         sidebar.add(brand);
         sidebar.add(navButton("⌂", "Overview", "overview"));
-        sidebar.add(navButton("⇧", "Send files", "send"));
-        sidebar.add(navButton("⇩", "Receive files", "receive"));
         sidebar.add(navButton("◷", "Transfer history", "history"));
         sidebar.add(Box.createVerticalStrut(22));
         JLabel tools = new JLabel("  TOOLS");
@@ -156,8 +164,6 @@ public class Main extends JFrame {
         pages.setOpaque(false);
         pages.setBorder(new EmptyBorder(0, 30, 28, 30));
         pages.add(dashboardPage(), "overview");
-        pages.add(sendPage(), "send");
-        pages.add(receivePage(), "receive");
         pages.add(historyPage(), "history");
         pages.add(settingsPage(), "settings");
         workspace.add(header, BorderLayout.NORTH);
@@ -178,12 +184,10 @@ public class Main extends JFrame {
         actions.setOpaque(false);
         actions.setPreferredSize(new Dimension(700, 238));
         actions.add(actionCard("SEND FILES", "Choose a nearby computer on the same Wi-Fi and send files directly.", "↑", BLUE,
-                "Send files  →", this::openSendPage));
+                "Send files  →", this::beginSendFlow));
         actions.add(actionCard("RECEIVE FILES", "Start your receiver so other computers on this Wi-Fi can find you.", "↓", GREEN,
-                "Start receiving  →", this::openReceivePage));
+                "Start receiving  →", this::startPeerServices));
 
-        JPanel body = new JPanel(new BorderLayout(0, 16));
-        body.setOpaque(false);
         JPanel stats = new JPanel(new GridLayout(1, 3, 14, 0));
         stats.setOpaque(false);
         stats.add(groupStatusCard());
@@ -205,12 +209,36 @@ public class Main extends JFrame {
         totals.add(combined);
         stats.add(totals);
 
+        transferProgress.setStringPainted(true);
+        transferProgress.setString("Ready to send");
+        transferProgress.setForeground(BLUE);
+        transferProgress.setBackground(new Color(232, 236, 246));
+        transferProgress.setBorderPainted(false);
+        receiveProgress.setStringPainted(true);
+        receiveProgress.setString("");
+        receiveProgress.setForeground(GREEN);
+        receiveProgress.setBackground(new Color(232, 236, 246));
+        receiveProgress.setBorderPainted(false);
+        receiveProgress.setVisible(false);
+        transferMessage.setForeground(MUTED);
+        transferMessage.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        receiveMessage.setForeground(MUTED);
+        receiveMessage.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+
+        JPanel progressCards = new JPanel(new GridLayout(1, 2, 14, 0));
+        progressCards.setOpaque(false);
+        progressCards.add(progressCard("SENDING", transferMessage, transferProgress, BLUE));
+        progressCards.add(progressCard("RECEIVING", receiveMessage, receiveProgress, GREEN));
+
+        sendWorkflow = sendWorkflowPanel();
+        sendWorkflow.setVisible(false);
+
         JPanel lower = new JPanel(new BorderLayout(0, 14));
         lower.setOpaque(false);
         JPanel recent = rounded(Color.WHITE, 16);
         recent.setLayout(new BorderLayout(0, 10));
         recent.setBorder(new EmptyBorder(17, 19, 17, 19));
-        recent.add(sectionTitle("Recent transfers", "Latest files received by this computer"), BorderLayout.NORTH);
+        recent.add(sectionTitle("Recent transfers", "Latest sent and received files"), BorderLayout.NORTH);
         recentTransfers.setForeground(INK);
         recentTransfers.setFont(new Font("Segoe UI", Font.PLAIN, 13));
         recent.add(recentTransfers, BorderLayout.CENTER);
@@ -226,11 +254,33 @@ public class Main extends JFrame {
         activityCard.add(sectionTitle("Activity", "Live receiver and transfer updates"), BorderLayout.NORTH);
         activityCard.add(new JScrollPane(activity), BorderLayout.CENTER);
         lower.add(activityCard, BorderLayout.CENTER);
-        body.add(stats, BorderLayout.NORTH);
-        body.add(lower, BorderLayout.CENTER);
+
+        JPanel body = new JPanel();
+        body.setOpaque(false);
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        body.add(stats);
+        body.add(Box.createVerticalStrut(14));
+        body.add(progressCards);
+        body.add(Box.createVerticalStrut(14));
+        body.add(sendWorkflow);
+        body.add(Box.createVerticalStrut(14));
+        body.add(lower);
         page.add(actions, BorderLayout.NORTH);
         page.add(body, BorderLayout.CENTER);
         return page;
+    }
+
+    private JPanel progressCard(String caption, JLabel message, JProgressBar progress, Color accent) {
+        JPanel card = rounded(Color.WHITE, 16);
+        card.setLayout(new BorderLayout(0, 9));
+        card.setBorder(new EmptyBorder(14, 17, 14, 17));
+        JLabel title = smallCaps(caption);
+        title.setForeground(accent);
+        card.add(title, BorderLayout.NORTH);
+        card.add(message, BorderLayout.CENTER);
+        card.add(progress, BorderLayout.SOUTH);
+        progress.setPreferredSize(new Dimension(260, 20));
+        return card;
     }
 
     private JPanel groupStatusCard() {
@@ -320,13 +370,14 @@ public class Main extends JFrame {
         return card;
     }
 
-    private JPanel sendPage() {
-        JPanel page = new JPanel(new BorderLayout(0, 16));
-        page.setOpaque(false);
-        JPanel connection = rounded(Color.WHITE, 16);
-        connection.setLayout(new BorderLayout(0, 14));
-        connection.setBorder(new EmptyBorder(19, 21, 19, 21));
-        connection.add(sectionTitle("Connect to a group peer", "Find a peer automatically or enter its address"), BorderLayout.NORTH);
+    private JPanel sendWorkflowPanel() {
+        JPanel card = rounded(Color.WHITE, 16);
+        card.setLayout(new BorderLayout(0, 13));
+        card.setBorder(new EmptyBorder(17, 20, 17, 20));
+        card.add(sectionTitle("Choose a receiver", "Select a device found on this Wi-Fi, or enter its address"), BorderLayout.NORTH);
+
+        JPanel content = new JPanel(new BorderLayout(0, 10));
+        content.setOpaque(false);
         JPanel fields = new JPanel(new GridBagLayout());
         fields.setOpaque(false);
         GridBagConstraints c = new GridBagConstraints();
@@ -335,118 +386,54 @@ public class Main extends JFrame {
         c.weightx = 1;
         c.gridx = 0;
         c.gridy = 0;
-        fields.add(fieldBlock("PEER ADDRESS OR IP", host), c);
+        fields.add(fieldBlock("DEVICE IP ADDRESS", host), c);
         c.gridx = 1;
         c.weightx = 0.25;
         fields.add(fieldBlock("PORT", port), c);
-        connection.add(fields, BorderLayout.CENTER);
-        JPanel discoveryPanel = new JPanel(new BorderLayout(8, 8));
-        discoveryPanel.setOpaque(false);
-        JPanel discoveryActions = new JPanel(new BorderLayout(8, 0));
-        discoveryActions.setOpaque(false);
-        JLabel discoveryHint = new JLabel("Find receivers connected to the same Wi-Fi network");
-        discoveryHint.setForeground(MUTED);
-        discoveryHint.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        discoveryActions.add(discoveryHint, BorderLayout.CENTER);
-        JButton scan = secondaryButton("Find devices");
-        scan.addActionListener(e -> scanForDevices(scan));
-        discoveryActions.add(scan, BorderLayout.EAST);
-        discoveryPanel.add(discoveryActions, BorderLayout.NORTH);
+        content.add(fields, BorderLayout.NORTH);
+
         deviceList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         deviceList.setVisibleRowCount(2);
         deviceList.setFixedCellHeight(30);
         deviceList.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         deviceList.setSelectionBackground(new Color(231, 237, 255));
         deviceList.setSelectionForeground(INK);
+        deviceList.setBorder(new EmptyBorder(4, 7, 4, 7));
+        deviceList.addListSelectionListener(event -> {
+            if (event.getValueIsAdjusting()) return;
+            LanDiscovery.Device selected = deviceList.getSelectedValue();
+            if (selected != null) {
+                host.setText(selected.address());
+                port.setText(String.valueOf(selected.port()));
+            }
+        });
         JScrollPane deviceScroll = new JScrollPane(deviceList);
-        deviceScroll.setPreferredSize(new Dimension(200, 64));
+        deviceScroll.setPreferredSize(new Dimension(200, 72));
         deviceScroll.setBorder(BorderFactory.createLineBorder(new Color(230, 234, 242)));
-        discoveryPanel.add(deviceScroll, BorderLayout.CENTER);
-        JButton connect = primaryButton("Connect to selected device");
-        connect.addActionListener(e -> selectDiscoveredDevice());
-        discoveryPanel.add(connect, BorderLayout.SOUTH);
-        connection.add(discoveryPanel, BorderLayout.SOUTH);
+        content.add(deviceScroll, BorderLayout.CENTER);
 
-        JPanel transfer = rounded(Color.WHITE, 16);
-        transfer.setLayout(new BorderLayout(0, 14));
-        transfer.setBorder(new EmptyBorder(19, 21, 19, 21));
-        transfer.add(sectionTitle("Choose what to send", "Files are transferred directly over your local network"), BorderLayout.NORTH);
-        JPanel sendContent = new JPanel();
-        sendContent.setOpaque(false);
-        sendContent.setLayout(new BoxLayout(sendContent, BoxLayout.Y_AXIS));
-        JButton choose = primaryButton("＋   Choose a file");
-        choose.setAlignmentX(Component.LEFT_ALIGNMENT);
-        choose.addActionListener(e -> chooseAndSend());
-        transferProgress.setStringPainted(true);
-        transferProgress.setString("Ready");
-        transferProgress.setForeground(BLUE);
-        transferProgress.setBackground(new Color(232, 236, 246));
-        transferProgress.setBorderPainted(false);
-        transferMessage.setForeground(MUTED);
-        transferMessage.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        sendContent.add(choose);
-        sendContent.add(Box.createVerticalStrut(20));
-        sendContent.add(transferMessage);
-        sendContent.add(Box.createVerticalStrut(8));
-        sendContent.add(transferProgress);
-        transfer.add(sendContent, BorderLayout.CENTER);
-
-        JLabel tip = new JLabel("Both computers must be connected to the same Wi-Fi network.");
-        tip.setForeground(MUTED);
-        tip.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        page.add(connection, BorderLayout.NORTH);
-        JPanel middle = new JPanel(new BorderLayout(0, 12));
-        middle.setOpaque(false);
-        middle.add(transfer, BorderLayout.CENTER);
-        middle.add(tip, BorderLayout.SOUTH);
-        page.add(middle, BorderLayout.CENTER);
-        return page;
-    }
-
-    private JPanel receivePage() {
-        JPanel page = new JPanel(new BorderLayout(0, 16));
-        page.setOpaque(false);
-        JPanel card = rounded(Color.WHITE, 18);
-        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
-        card.setBorder(new EmptyBorder(24, 26, 25, 26));
-        card.add(sectionTitle("Receive files", "Keep this screen open while your receiver is running"));
-        card.add(Box.createVerticalStrut(22));
-
-        receiverPageStatus.setFont(new Font("Segoe UI", Font.BOLD, 18));
-        receiverPageStatus.setForeground(MUTED);
-        receiverPageStatus.setAlignmentX(Component.LEFT_ALIGNMENT);
-        card.add(receiverPageStatus);
-        card.add(Box.createVerticalStrut(8));
-        JLabel instruction = new JLabel("Make sure the sender is connected to the same Wi-Fi network.");
-        instruction.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        instruction.setForeground(MUTED);
-        card.add(instruction);
-        card.add(Box.createVerticalStrut(26));
-
-        receiveMessage.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        receiveMessage.setForeground(INK);
-        receiveProgress.setStringPainted(true);
-        receiveProgress.setString("");
-        receiveProgress.setForeground(GREEN);
-        receiveProgress.setBackground(new Color(232, 236, 246));
-        receiveProgress.setBorderPainted(false);
-        receiveProgress.setPreferredSize(new Dimension(640, 24));
-        receiveProgress.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
-        receiveProgress.setVisible(false);
-        receiveMessage.setAlignmentX(Component.LEFT_ALIGNMENT);
-        receiveProgress.setAlignmentX(Component.LEFT_ALIGNMENT);
-        card.add(receiveMessage);
-        card.add(Box.createVerticalStrut(10));
-        card.add(receiveProgress);
-
-        JButton start = primaryButton("Start receiving");
-        start.setAlignmentX(Component.LEFT_ALIGNMENT);
-        start.addActionListener(event -> startPeerServices());
-        card.add(Box.createVerticalStrut(20));
-        card.add(start);
-
-        page.add(card, BorderLayout.NORTH);
-        return page;
+        JPanel actions = new JPanel(new BorderLayout(10, 0));
+        actions.setOpaque(false);
+        JLabel hint = new JLabel("No matching device? Enter its IP address above.");
+        hint.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        hint.setForeground(MUTED);
+        actions.add(hint, BorderLayout.CENTER);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        scanButton = secondaryButton("Find devices");
+        scanButton.addActionListener(event -> scanForDevices(scanButton));
+        connectButton = secondaryButton("Connect");
+        connectButton.addActionListener(event -> selectDiscoveredDevice());
+        chooseFileButton = primaryButton("Choose a file");
+        chooseFileButton.setEnabled(false);
+        chooseFileButton.addActionListener(event -> chooseAndSend());
+        buttons.add(scanButton);
+        buttons.add(connectButton);
+        buttons.add(chooseFileButton);
+        actions.add(buttons, BorderLayout.EAST);
+        content.add(actions, BorderLayout.SOUTH);
+        card.add(content, BorderLayout.CENTER);
+        return card;
     }
 
     private JPanel fieldBlock(String caption, JTextField field) {
@@ -463,38 +450,75 @@ public class Main extends JFrame {
     }
 
     private JPanel historyPage() {
-        JPanel page = new JPanel(new BorderLayout(0, 14));
+        JPanel page = new JPanel(new BorderLayout(0, 16));
         page.setOpaque(false);
-        JPanel searchCard = rounded(Color.WHITE, 15);
-        searchCard.setLayout(new BorderLayout(10, 0));
-        searchCard.setBorder(new EmptyBorder(12, 15, 12, 15));
+        JPanel heading = sectionTitle("Transfer history", "A complete record of files sent and received on this device");
         JTextField search = new JTextField();
         search.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        search.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(new Color(224, 229, 238)), new EmptyBorder(9, 10, 9, 10)));
-        search.putClientProperty("JTextField.placeholderText", "Search by filename");
+        search.setForeground(INK);
+        search.setBackground(new Color(248, 249, 252));
+        search.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(224, 229, 238)), new EmptyBorder(10, 12, 10, 12)));
+        search.putClientProperty("JTextField.placeholderText", "Search by file or device");
         JButton searchButton = secondaryButton("Search");
+        JPanel searchCard = rounded(Color.WHITE, 15);
+        searchCard.setLayout(new BorderLayout(12, 0));
+        searchCard.setBorder(new EmptyBorder(13, 15, 13, 15));
         searchCard.add(search, BorderLayout.CENTER);
         searchCard.add(searchButton, BorderLayout.EAST);
 
         JTable table = new JTable(historyRows);
-        table.setRowHeight(38);
+        table.setRowHeight(46);
         table.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         table.setForeground(INK);
-        table.setGridColor(new Color(238, 241, 246));
-        table.setShowVerticalLines(false);
-        table.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 11));
-        table.getTableHeader().setForeground(MUTED);
-        table.getTableHeader().setBackground(new Color(249, 250, 252));
+        table.setSelectionBackground(new Color(231, 237, 255));
+        table.setSelectionForeground(INK);
+        table.setShowGrid(false);
+        table.setIntercellSpacing(new Dimension(0, 0));
+        table.setFillsViewportHeight(true);
+        table.setAutoCreateRowSorter(true);
+        JTableHeader header = table.getTableHeader();
+        header.setFont(new Font("Segoe UI", Font.BOLD, 10));
+        header.setForeground(MUTED);
+        header.setBackground(new Color(249, 250, 252));
+        header.setPreferredSize(new Dimension(header.getPreferredSize().width, 40));
+        header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(230, 234, 242)));
+        int[] widths = {220, 90, 150, 90, 170, 95};
+        for (int i = 0; i < widths.length; i++) table.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
+        for (int i = 0; i < table.getColumnCount(); i++) {
+            final int modelColumn = table.convertColumnIndexToModel(i);
+            table.getColumnModel().getColumn(i).setCellRenderer(new DefaultTableCellRenderer() {
+                @Override public Component getTableCellRendererComponent(JTable target, Object value,
+                        boolean selected, boolean focused, int row, int column) {
+                    Object displayValue = modelColumn == 4 && value instanceof Instant instant
+                            ? formatDate(instant) : value;
+                    JLabel cell = (JLabel) super.getTableCellRendererComponent(
+                            target, displayValue, selected, focused, row, column);
+                    cell.setBorder(new EmptyBorder(0, 12, 0, 10));
+                    if (!selected) cell.setBackground(row % 2 == 0 ? Color.WHITE : new Color(249, 250, 253));
+                    if (modelColumn == 5) {
+                        cell.setFont(new Font("Segoe UI", Font.BOLD, 11));
+                        cell.setForeground("Failed".equals(value) ? new Color(190, 62, 75) : GREEN);
+                    } else if (!selected) cell.setForeground(INK);
+                    return cell;
+                }
+            });
+        }
         JScrollPane scroll = new JScrollPane(table);
         scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.getViewport().setBackground(Color.WHITE);
         JPanel tableCard = rounded(Color.WHITE, 15);
         tableCard.setLayout(new BorderLayout());
-        tableCard.setBorder(new EmptyBorder(8, 8, 8, 8));
+        tableCard.setBorder(new EmptyBorder(7, 7, 7, 7));
         tableCard.add(scroll);
         Runnable filter = () -> filterHistory(search.getText());
         searchButton.addActionListener(e -> filter.run());
         search.addActionListener(e -> filter.run());
-        page.add(searchCard, BorderLayout.NORTH);
+        JPanel top = new JPanel(new BorderLayout(0, 14));
+        top.setOpaque(false);
+        top.add(heading, BorderLayout.NORTH);
+        top.add(searchCard, BorderLayout.CENTER);
+        page.add(top, BorderLayout.NORTH);
         page.add(tableCard, BorderLayout.CENTER);
         return page;
     }
@@ -615,12 +639,12 @@ public class Main extends JFrame {
         if (key.equals("history")) filterHistory("");
     }
 
-    private void openSendPage() {
-        showPage("send", "Send files");
-    }
-
-    private void openReceivePage() {
-        if (startPeerServices()) showPage("receive", "Receive files");
+    private void beginSendFlow() {
+        sendWorkflow.setVisible(true);
+        sendWorkflow.revalidate();
+        sendWorkflow.repaint();
+        transferMessage.setText("Searching for receivers on this Wi-Fi...");
+        if (scanButton != null) scanForDevices(scanButton);
     }
 
     private boolean startPeerServices() {
@@ -641,8 +665,6 @@ public class Main extends JFrame {
             }
             status.setText("Listening on port " + serverPort);
             status.setForeground(GREEN);
-            receiverPageStatus.setText("Listening on port " + serverPort);
-            receiverPageStatus.setForeground(GREEN);
             receiverOverview.setText("Available to devices on the same Wi-Fi");
             return true;
         } catch (Exception ex) {
@@ -666,8 +688,6 @@ public class Main extends JFrame {
         }
         status.setText("Receiver stopped");
         status.setForeground(MUTED);
-        receiverPageStatus.setText("Receiver stopped");
-        receiverPageStatus.setForeground(MUTED);
         clientCount.setText("0");
         receiveMessage.setText("Waiting for an incoming file");
         receiverOverview.setText("Start receiving to accept files");
@@ -697,11 +717,16 @@ public class Main extends JFrame {
             activity.setCaretPosition(activity.getDocument().getLength());
             FileServer active = server;
             clientCount.setText(String.valueOf(active == null ? 0 : active.connectedClients()));
+            if (event.startsWith("Peer connected: ")) {
+                String peerAddress = event.substring("Peer connected: ".length());
+                showMessage("Connected successfully with " + peerAddress + ".");
+            }
             if (event.startsWith("Received ")) {
                 receiveMessage.setText(event);
                 receiveProgress.setValue(100);
                 receiveProgress.setString("Complete");
                 receiverOverview.setText("File received successfully");
+                showMessage("Transfer completed successfully. " + event);
             }
             refreshHistory();
         });
@@ -801,34 +826,48 @@ public class Main extends JFrame {
                 discovered.forEach(deviceModel::addElement);
                 if (error != null) transferMessage.setText("Device search failed · " + error);
                 else if (discovered.isEmpty()) transferMessage.setText("No peers found · check the same Wi-Fi connection and try again");
-                else transferMessage.setText("Found " + discovered.size() + " peer(s) · select one and connect");
+                else transferMessage.setText("Found " + discovered.size() + " device(s) · select one and connect");
             });
         });
     }
 
     private void selectDiscoveredDevice() {
         LanDiscovery.Device selected = deviceList.getSelectedValue();
-        if (selected == null) {
-            showMessage("Find devices, then select a peer from the list.");
+        String targetHost = selected == null ? host.getText().trim() : selected.address();
+        int targetPort;
+        try {
+            targetPort = Integer.parseInt(selected == null ? port.getText().trim() : String.valueOf(selected.port()));
+            if (targetHost.isBlank() || !FileValidator.validPort(targetPort)) {
+                throw new IllegalArgumentException("Enter a device IP address and a valid port.");
+            }
+        } catch (Exception ex) {
+            showMessage(ex.getMessage() == null ? "Enter a device IP address and a valid port." : ex.getMessage());
             return;
         }
-        host.setText(selected.address());
-        port.setText(String.valueOf(selected.port()));
-        transferMessage.setText("Connecting to " + selected.name() + "…");
-        showPage("send", "Send files");
+        host.setText(targetHost);
+        port.setText(String.valueOf(targetPort));
+        String deviceName = selected == null ? targetHost : selected.name();
+        transferMessage.setText("Connecting to " + deviceName + "...");
+        connectButton.setEnabled(false);
         background.submit(() -> {
             try {
                 FileClient.Connection previous = outgoingConnection;
                 if (previous != null) previous.close();
-                FileClient.Connection connected = FileClient.connect(selected.address(), selected.port());
+                FileClient.Connection connected = FileClient.connect(targetHost, targetPort);
                 outgoingConnection = connected;
-                SwingUtilities.invokeLater(() -> transferMessage.setText(
-                        "Connected to " + selected.name() + " · choose a file to send"));
+                SwingUtilities.invokeLater(() -> {
+                    connectButton.setEnabled(true);
+                    chooseFileButton.setEnabled(true);
+                    transferMessage.setText("Connected to " + deviceName + " · ready to send");
+                    showMessage("Connected successfully to " + deviceName + ".");
+                });
             } catch (Exception ex) {
                 outgoingConnection = null;
                 SwingUtilities.invokeLater(() -> {
+                    connectButton.setEnabled(true);
+                    chooseFileButton.setEnabled(false);
                     transferMessage.setText("Could not connect · " + ex.getMessage());
-                    showMessage("Could not connect to " + selected.address() + ": " + ex.getMessage());
+                    showMessage("Could not connect to " + targetHost + ": " + ex.getMessage());
                 });
             }
         });
@@ -867,6 +906,13 @@ public class Main extends JFrame {
                 }));
                 usedConnection.close();
                 outgoingConnection = null;
+                String historyWarning = null;
+                try {
+                    repository.add(Transfer.sent(file.getFileName().toString(), targetHost, size));
+                } catch (Exception historyError) {
+                    historyWarning = historyError.getMessage();
+                }
+                String savedHistoryWarning = historyWarning;
                 SwingUtilities.invokeLater(() -> {
                     double elapsedSeconds = Math.max(0.001, (System.nanoTime() - startedAt) / 1_000_000_000.0);
                     long averageSpeed = (long) (size / elapsedSeconds);
@@ -874,6 +920,13 @@ public class Main extends JFrame {
                             + formatBytes(averageSpeed) + "/s");
                     transferProgress.setValue(100);
                     transferProgress.setString("Complete  ·  " + formatBytes(averageSpeed) + "/s");
+                    refreshHistory();
+                    String confirmation = "Transfer completed successfully: " + file.getFileName();
+                    if (savedHistoryWarning != null) {
+                        confirmation += "\nThe file was sent, but its history entry could not be saved: "
+                                + savedHistoryWarning;
+                    }
+                    showMessage(confirmation);
                 });
             } catch (Exception ex) {
                 if (usedConnection != null) try { usedConnection.close(); } catch (Exception closeError) {
@@ -885,6 +938,7 @@ public class Main extends JFrame {
                     System.err.println("Could not close failed send connection: " + closeError.getMessage());
                 }
                 SwingUtilities.invokeLater(() -> {
+                    chooseFileButton.setEnabled(false);
                     transferMessage.setText("Transfer failed · " + ex.getMessage());
                     transferProgress.setString("Failed");
                     showMessage("Send failed: " + ex.getMessage());
@@ -900,7 +954,9 @@ public class Main extends JFrame {
             fileTotal.setText(String.valueOf(transfers.size()));
             byteTotal.setText(formatBytes(bytes));
             recentTransfers.setText(transfers.isEmpty() ? "No transfers yet" : String.join("   ·   ",
-                    transfers.stream().skip(Math.max(0, transfers.size() - 3L)).map(Transfer::filename).toList()));
+                    transfers.stream().skip(Math.max(0, transfers.size() - 3L))
+                            .map(t -> ("SENT".equalsIgnoreCase(t.status()) ? "Sent: " : "Received: ") + t.filename())
+                            .toList()));
             filterHistory("");
         } catch (Exception ex) {
             activity.append("History unavailable: " + ex.getMessage() + "\n");
@@ -912,8 +968,15 @@ public class Main extends JFrame {
             String needle = query.toLowerCase(Locale.ROOT);
             historyRows.setRowCount(0);
             for (Transfer t : repository.load()) {
-                if (t.filename().toLowerCase(Locale.ROOT).contains(needle))
-                    historyRows.addRow(new Object[]{t.filename(), t.sender(), formatBytes(t.size()), t.dateTime()});
+                boolean matchesFile = t.filename().toLowerCase(Locale.ROOT).contains(needle);
+                boolean matchesDevice = t.sender().toLowerCase(Locale.ROOT).contains(needle);
+                if (matchesFile || matchesDevice) {
+                    boolean sent = "SENT".equalsIgnoreCase(t.status());
+                    historyRows.addRow(new Object[]{
+                            t.filename(), sent ? "Sent" : "Received", t.sender(),
+                            formatBytes(t.size()), t.dateTime(), "Complete"
+                    });
+                }
             }
         } catch (Exception ex) {
             activity.append("History search failed: " + ex.getMessage() + "\n");
@@ -925,6 +988,10 @@ public class Main extends JFrame {
         if (bytes < 1024 * 1024) return String.format(Locale.ROOT, "%.1f KB", bytes / 1024.0);
         if (bytes < 1024L * 1024 * 1024) return String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024));
         return String.format(Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    private String formatDate(Instant dateTime) {
+        return HISTORY_DATE.format(dateTime);
     }
 
     private void showMessage(String text) {
