@@ -1,13 +1,13 @@
 # LAN File Sharing Application
 
-A beginner-oriented Java Swing application for sending files over a trusted local network. One computer starts the receiver; another discovers it or enters its IP address and port, then selects a file. The receiver saves the file and records successful transfers.
+A beginner-oriented Java Swing application for exchanging files directly between two devices. A user creates a group or joins another device's Wi-Fi hotspot; either participant can then send and receive files. File transfer uses the local network and does not require an Internet connection once both devices are connected to the same group.
 
 ## Features
 
 - Dashboard with server status, local IP, live connected-client count, total received files/bytes, and recent filenames.
-- Two large, colorful Send and Receive action cards at the front of the Overview; other information appears below. The main content scrolls when it does not fit.
-- UDP LAN discovery so a sender can find active ShareLAN receivers and connect from a device list; manual host/port entry remains available.
-- TCP file sending with a live percentage, bytes-sent count, transfer speed, 64 KiB buffered chunks, and binary-safe framing.
+- Two prominent Create Group and Join Group actions on Overview. Each action starts that device's peer services and opens Windows network settings to help establish the Wi-Fi link.
+- Either group participant can send and receive. UDP discovery lists active ShareLAN peers; manual host/port entry remains available.
+- TCP file transfer with live progress, bytes transferred, and speed shown on both the sender and receiver; data streams in 64 KiB buffered chunks.
 - Receiver with a fixed pool of eight workers, safe filename checks, available-disk-space checks, partial-file cleanup, and collision-safe destination naming. There is no application-level file size cap.
 - CSV transfer history with filename search.
 - Recursive folder-walking demonstration and JUnit tests. A small command-language parser remains as a course-code example; its console has been removed from the app interface.
@@ -31,7 +31,7 @@ The accept thread waits for connections. Each connected socket is submitted to a
 
 ## Project structure
 
-`src/main/java/com/lanshare/`: `Main` (GUI); `network/` (`FileClient`, `FileServer`); `model/` (`Transfer`); `storage/` (repository interface and CSV implementation); `service/` (`FolderWalker`); `parser/` (`CommandInterpreter`); `util/` (validation). Tests are in `src/test/java`.
+`src/main/java/com/lanshare/`: `Main` (GUI); `network/` (`FileClient`, `FileServer`, `LanDiscovery`); `model/` (`Transfer`); `storage/` (repository interface and CSV implementation); `service/` (`FolderWalker`); `parser/` (`CommandInterpreter`); `util/` (validation). Tests are in `src/test/java`.
 
 ## Build and run
 
@@ -43,11 +43,13 @@ mvn package
 java -jar target/lan-file-sharing-1.0.0.jar
 ```
 
-On the receiving computer, open Overview and start receiving. The default port is 5050. On the sending computer, open Send files, enter the receiver's LAN address and port if needed, then choose a file. Allow inbound TCP on the receiver's firewall. Use the receiver's LAN IP; `127.0.0.1` only refers to the same computer. Received files default to `downloads/`; history is stored in `data/history.csv`.
+On the host computer, open Overview and click **Create Group**. Windows Mobile Hotspot settings will open; turn on the hotspot manually. On the other computer, click **Join Group** and connect to that hotspot in Windows Wi-Fi settings. Both apps start their peer receiver and discovery services, so either device can send to the other. Choose a file from **Send files** and use the progress/speed indicators to follow the transfer. Received files default to `downloads/`; history is stored in `data/history.csv`.
 
-Alternatively, open **Send files** and click **Find devices**. Choose a receiver from the list and click **Connect to selected device**; the app discovers active receivers by UDP broadcast on port 5051 and opens the TCP transfer connection. Discovery can be blocked by Wi-Fi access-point isolation, a firewall, or a network that filters broadcasts. In that case, type the receiver's IP address and port manually. Permit UDP 5051 and TCP 5050 (or the selected transfer port) through the receiving computer's firewall.
+Open **Send files** and click **Find devices**. Choose the peer and click **Connect to selected device**; ShareLAN discovers active group peers by UDP broadcast on port 5051 and opens the TCP transfer connection. Discovery can be blocked by Wi-Fi client isolation, firewall rules, or network broadcast filtering. In that case, type the peer's IP address and port manually. Permit UDP 5051 and TCP 5050 (or the selected transfer port) through the firewall.
 
-The latest interface calls the main page **Overview** and the transfer page **Send files**. The Receive action starts/stops the receiver from Overview. Its card also displays the receiver's local address for manual connections. Transfer speed is an average since the current send began, refreshed as data is written.
+Windows controls whether Mobile Hotspot is enabled; ShareLAN opens the relevant Settings page but does not silently toggle the hotspot. The app's local file transfer does not use Internet services. The devices still need an active local Wi-Fi connection between them, and some network configurations may block peer-to-peer traffic.
+
+The transfer protocol works without Internet access once both computers have a local Wi-Fi link. Whether Windows can create its hotspot with no active upstream connection depends on the Windows configuration and Wi-Fi adapter. If it cannot, use a phone hotspot with no mobile data or a local access point/router without Internet, provided it allows devices to communicate with each other.
 
 ## Course concept mapping
 
@@ -76,4 +78,4 @@ For a source-by-source explanation and a requirement-by-requirement viva walkthr
 - JUnit tests run with `mvn clean test`. In the prepared environment Maven is absent, so JUnit has not been executed there.
 - If connection fails, check that both machines share a reachable LAN, use the receiver's LAN IP, use the same port, and allow inbound TCP through the firewall.
 - Choose the receive directory before starting the server; changes apply on the next start. Port is editable in Connect & Send. Very large files depend on free disk space and the available filesystem capacity.
-- No encryption, authentication, transfer resume, folder sending, or public internet support. Cross-device and GUI behavior require a desktop and second LAN host.
+- No encryption, authentication, transfer resume, folder sending, or public Internet relay. Offline transfers work only when the operating system and Wi-Fi hardware provide a local hotspot/group connection. Cross-device behavior should be verified on the target devices.

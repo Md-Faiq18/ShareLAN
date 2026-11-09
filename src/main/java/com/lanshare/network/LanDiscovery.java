@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Small UDP broadcast discovery service for finding active ShareLAN receivers. */
+/** Answers UDP discovery requests and searches for active ShareLAN peers. */
 public final class LanDiscovery implements AutoCloseable {
     public static final int DISCOVERY_PORT = 5051;
     private static final String REQUEST = "SHARELAN_DISCOVER_V1";
@@ -25,24 +25,29 @@ public final class LanDiscovery implements AutoCloseable {
     private final int transferPort;
     private final AtomicBoolean running = new AtomicBoolean();
     private DatagramSocket listener;
-    private Thread listenerThread;
 
     public record Device(String name, String address, int port) {
-        @Override public String toString() { return name + "   " + address + ":" + port; }
+        @Override public String toString() {
+            return name + "   " + address + ":" + port;
+        }
     }
 
-    public LanDiscovery(int transferPort) { this.transferPort = transferPort; }
+    public LanDiscovery(int transferPort) {
+        this.transferPort = transferPort;
+    }
 
-    /** Starts answering discovery requests while this computer's file receiver is running. */
+    /** Starts answering requests while the local peer receiver is running. */
     public synchronized void start() throws SocketException {
         if (running.get()) return;
+
         listener = new DatagramSocket(null);
         listener.setReuseAddress(true);
         listener.bind(new InetSocketAddress(DISCOVERY_PORT));
         running.set(true);
-        listenerThread = new Thread(this::answerRequests, "sharelan-discovery");
-        listenerThread.setDaemon(true);
-        listenerThread.start();
+
+        Thread responder = new Thread(this::answerRequests, "sharelan-discovery");
+        responder.setDaemon(true);
+        responder.start();
     }
 
     private void answerRequests() {
@@ -51,53 +56,68 @@ public final class LanDiscovery implements AutoCloseable {
             try {
                 DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 listener.receive(packet);
-                String request = new String(packet.getData(), packet.getOffset(), packet.getLength(), StandardCharsets.UTF_8);
-                if (REQUEST.equals(request)) {
-                    byte[] response = (RESPONSE_PREFIX + transferPort).getBytes(StandardCharsets.UTF_8);
-                    listener.send(new DatagramPacket(response, response.length, packet.getAddress(), packet.getPort()));
-                }
+                String message = new String(packet.getData(), packet.getOffset(),
+                        packet.getLength(), StandardCharsets.UTF_8);
+                if (!REQUEST.equals(message)) continue;
+
+                byte[] reply = (RESPONSE_PREFIX + transferPort).getBytes(StandardCharsets.UTF_8);
+                listener.send(new DatagramPacket(reply, reply.length,
+                        packet.getAddress(), packet.getPort()));
             } catch (IOException ex) {
-                if (running.get()) System.err.println("LAN discovery listener failed: " + ex.getMessage());
+                if (running.get()) System.err.println("LAN discovery failed: " + ex.getMessage());
             }
         }
     }
 
-    /** Broadcasts a query and returns receivers that answer within the short scan window. */
+    /** Broadcasts a request and collects replies for a short discovery window. */
     public static List<Device> findReceivers() throws IOException {
         Map<String, Device> found = new LinkedHashMap<>();
         byte[] query = REQUEST.getBytes(StandardCharsets.UTF_8);
         try (DatagramSocket socket = new DatagramSocket()) {
             socket.setBroadcast(true);
-            socket.setSoTimeout(1800);
-            DatagramPacket request = new DatagramPacket(query, query.length,
-                    InetAddress.getByName("255.255.255.255"), DISCOVERY_PORT);
-            socket.send(request);
+            socket.setSoTimeout(1_800);
+            sendQuery(socket, query, InetAddress.getByName("255.255.255.255"));
             for (InetAddress broadcast : interfaceBroadcasts()) {
-                try { socket.send(new DatagramPacket(query, query.length, broadcast, DISCOVERY_PORT)); }
-                catch (IOException ignored) { /* Another interface may not support broadcast. */ }
+                try {
+                    sendQuery(socket, query, broadcast);
+                } catch (IOException ignored) {
+                    // A network interface may not support broadcast.
+                }
             }
 
-            long deadline = System.currentTimeMillis() + 1800;
+            long deadline = System.currentTimeMillis() + 1_800;
             while (System.currentTimeMillis() < deadline) {
                 try {
                     byte[] buffer = new byte[256];
                     DatagramPacket reply = new DatagramPacket(buffer, buffer.length);
                     socket.receive(reply);
-                    String value = new String(reply.getData(), reply.getOffset(), reply.getLength(), StandardCharsets.UTF_8);
-                    if (!value.startsWith(RESPONSE_PREFIX)) continue;
-                    int port = Integer.parseInt(value.substring(RESPONSE_PREFIX.length()));
-                    if (port < 1 || port > 65535) continue;
-                    String address = reply.getAddress().getHostAddress();
-                    found.putIfAbsent(address + ":" + port,
-                            new Device("ShareLAN receiver", address, port));
+                    addIfValid(found, reply);
                 } catch (java.net.SocketTimeoutException timeout) {
                     break;
-                } catch (IllegalArgumentException malformed) {
-                    // Ignore malformed packets; discovery is only a convenience on the local network.
                 }
             }
         }
         return new ArrayList<>(found.values());
+    }
+
+    private static void sendQuery(DatagramSocket socket, byte[] query, InetAddress address)
+            throws IOException {
+        socket.send(new DatagramPacket(query, query.length, address, DISCOVERY_PORT));
+    }
+
+    private static void addIfValid(Map<String, Device> found, DatagramPacket packet) {
+        String message = new String(packet.getData(), packet.getOffset(),
+                packet.getLength(), StandardCharsets.UTF_8);
+        if (!message.startsWith(RESPONSE_PREFIX)) return;
+
+        try {
+            int port = Integer.parseInt(message.substring(RESPONSE_PREFIX.length()));
+            if (port < 1 || port > 65_535) return;
+            String address = packet.getAddress().getHostAddress();
+            found.putIfAbsent(address + ":" + port, new Device("ShareLAN peer", address, port));
+        } catch (NumberFormatException ignored) {
+            // Ignore malformed discovery replies.
+        }
     }
 
     private static List<InetAddress> interfaceBroadcasts() throws SocketException {
@@ -106,9 +126,11 @@ public final class LanDiscovery implements AutoCloseable {
         while (interfaces != null && interfaces.hasMoreElements()) {
             NetworkInterface network = interfaces.nextElement();
             if (!network.isUp() || network.isLoopback()) continue;
+
             network.getInterfaceAddresses().forEach(address -> {
-                if (address.getAddress() instanceof Inet4Address && address.getBroadcast() != null)
+                if (address.getAddress() instanceof Inet4Address && address.getBroadcast() != null) {
                     broadcasts.add(address.getBroadcast());
+                }
             });
         }
         return broadcasts;
