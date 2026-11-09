@@ -5,7 +5,7 @@ data/
 *.iml
 *.part
 downloads/
-work/git
+work/
 docs/
 outputs/
 src/test/

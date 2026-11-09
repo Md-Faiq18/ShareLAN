@@ -14,7 +14,6 @@ import javax.swing.DefaultListModel;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -33,8 +32,9 @@ public class Main extends JFrame {
     private final CardLayout pageLayout = new CardLayout();
     private final JPanel pages = new JPanel(pageLayout);
     private final JLabel pageTitle = new JLabel("Overview");
-    private final JLabel status = new JLabel("No active group");
-    private final JLabel setupHint = new JLabel("Choose Create Group or Join Group to get started.");
+    private final JLabel status = new JLabel("Receiver stopped");
+    private final JLabel receiverPageStatus = new JLabel("Receiver stopped");
+    private final JLabel receiverOverview = new JLabel("Start receiving to accept files");
     private final JLabel clientCount = new JLabel("0");
     private final JLabel fileTotal = new JLabel("0");
     private final JLabel byteTotal = new JLabel("0 B");
@@ -70,7 +70,7 @@ public class Main extends JFrame {
         setLocationRelativeTo(null);
         addWindowListener(new WindowAdapter() {
             @Override public void windowClosing(WindowEvent event) {
-                leaveGroup();
+                stopPeerServices();
                 background.shutdownNow();
             }
         });
@@ -95,6 +95,7 @@ public class Main extends JFrame {
         sidebar.add(brand);
         sidebar.add(navButton("⌂", "Overview", "overview"));
         sidebar.add(navButton("⇧", "Send files", "send"));
+        sidebar.add(navButton("⇩", "Receive files", "receive"));
         sidebar.add(navButton("◷", "Transfer history", "history"));
         sidebar.add(Box.createVerticalStrut(22));
         JLabel tools = new JLabel("  TOOLS");
@@ -134,7 +135,7 @@ public class Main extends JFrame {
         header.setBorder(new EmptyBorder(25, 32, 18, 34));
         pageTitle.setFont(new Font("Segoe UI", Font.BOLD, 23));
         pageTitle.setForeground(INK);
-        JLabel subtitle = new JLabel("Direct device-to-device sharing; file transfers do not use the Internet");
+        JLabel subtitle = new JLabel("Send and receive directly over the same Wi-Fi network");
         subtitle.setForeground(MUTED);
         subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         JPanel titles = new JPanel();
@@ -144,7 +145,7 @@ public class Main extends JFrame {
         titles.add(Box.createVerticalStrut(4));
         titles.add(subtitle);
         header.add(titles, BorderLayout.WEST);
-        JLabel badge = new JLabel("  ●  LOCAL GROUP  ");
+        JLabel badge = new JLabel("  ●  SAME WI-FI  ");
         badge.setOpaque(true);
         badge.setBackground(new Color(228, 246, 239));
         badge.setForeground(new Color(34, 132, 99));
@@ -156,6 +157,7 @@ public class Main extends JFrame {
         pages.setBorder(new EmptyBorder(0, 30, 28, 30));
         pages.add(dashboardPage(), "overview");
         pages.add(sendPage(), "send");
+        pages.add(receivePage(), "receive");
         pages.add(historyPage(), "history");
         pages.add(settingsPage(), "settings");
         workspace.add(header, BorderLayout.NORTH);
@@ -175,10 +177,10 @@ public class Main extends JFrame {
         JPanel actions = new JPanel(new GridLayout(1, 2, 16, 0));
         actions.setOpaque(false);
         actions.setPreferredSize(new Dimension(700, 238));
-        actions.add(actionCard("CREATE GROUP", "Host this group's Wi-Fi hotspot and let nearby devices join.", "✚", BLUE,
-                "Create a group  →", this::createGroup));
-        actions.add(actionCard("JOIN GROUP", "Join another device's hotspot, then send and receive files.", "⇄", GREEN,
-                "Join a group  →", this::joinGroup));
+        actions.add(actionCard("SEND FILES", "Choose a nearby computer on the same Wi-Fi and send files directly.", "↑", BLUE,
+                "Send files  →", this::openSendPage));
+        actions.add(actionCard("RECEIVE FILES", "Start your receiver so other computers on this Wi-Fi can find you.", "↓", GREEN,
+                "Start receiving  →", this::openReceivePage));
 
         JPanel body = new JPanel(new BorderLayout(0, 16));
         body.setOpaque(false);
@@ -235,27 +237,16 @@ public class Main extends JFrame {
         JPanel card = rounded(Color.WHITE, 16);
         card.setLayout(new BorderLayout(8, 4));
         card.setBorder(new EmptyBorder(12, 15, 12, 13));
-        card.add(smallCaps("GROUP STATUS"), BorderLayout.NORTH);
+        card.add(smallCaps("RECEIVER STATUS"), BorderLayout.NORTH);
         JPanel details = new JPanel();
         details.setOpaque(false);
         details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
         styleMetric(status, 15);
-        receiveMessage.setFont(new Font("Segoe UI", Font.PLAIN, 10));
-        receiveMessage.setForeground(MUTED);
-        receiveProgress.setStringPainted(true);
-        receiveProgress.setString("");
-        receiveProgress.setForeground(GREEN);
-        receiveProgress.setPreferredSize(new Dimension(170, 13));
-        receiveProgress.setVisible(false);
-        setupHint.setFont(new Font("Segoe UI", Font.PLAIN, 10));
-        setupHint.setForeground(MUTED);
         details.add(status);
         details.add(Box.createVerticalStrut(2));
-        details.add(setupHint);
-        details.add(Box.createVerticalStrut(3));
-        details.add(receiveMessage);
-        details.add(Box.createVerticalStrut(4));
-        details.add(receiveProgress);
+        receiverOverview.setFont(new Font("Segoe UI", Font.PLAIN, 10));
+        receiverOverview.setForeground(MUTED);
+        details.add(receiverOverview);
         card.add(details, BorderLayout.CENTER);
         return card;
     }
@@ -353,7 +344,7 @@ public class Main extends JFrame {
         discoveryPanel.setOpaque(false);
         JPanel discoveryActions = new JPanel(new BorderLayout(8, 0));
         discoveryActions.setOpaque(false);
-        JLabel discoveryHint = new JLabel("ShareLAN peers on this Wi-Fi group");
+        JLabel discoveryHint = new JLabel("Find receivers connected to the same Wi-Fi network");
         discoveryHint.setForeground(MUTED);
         discoveryHint.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         discoveryActions.add(discoveryHint, BorderLayout.CENTER);
@@ -400,7 +391,7 @@ public class Main extends JFrame {
         sendContent.add(transferProgress);
         transfer.add(sendContent, BorderLayout.CENTER);
 
-        JLabel tip = new JLabel("Tip: on the other computer, start the receiver from Overview first.");
+        JLabel tip = new JLabel("Both computers must be connected to the same Wi-Fi network.");
         tip.setForeground(MUTED);
         tip.setFont(new Font("Segoe UI", Font.PLAIN, 12));
         page.add(connection, BorderLayout.NORTH);
@@ -409,6 +400,52 @@ public class Main extends JFrame {
         middle.add(transfer, BorderLayout.CENTER);
         middle.add(tip, BorderLayout.SOUTH);
         page.add(middle, BorderLayout.CENTER);
+        return page;
+    }
+
+    private JPanel receivePage() {
+        JPanel page = new JPanel(new BorderLayout(0, 16));
+        page.setOpaque(false);
+        JPanel card = rounded(Color.WHITE, 18);
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBorder(new EmptyBorder(24, 26, 25, 26));
+        card.add(sectionTitle("Receive files", "Keep this screen open while your receiver is running"));
+        card.add(Box.createVerticalStrut(22));
+
+        receiverPageStatus.setFont(new Font("Segoe UI", Font.BOLD, 18));
+        receiverPageStatus.setForeground(MUTED);
+        receiverPageStatus.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(receiverPageStatus);
+        card.add(Box.createVerticalStrut(8));
+        JLabel instruction = new JLabel("Make sure the sender is connected to the same Wi-Fi network.");
+        instruction.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        instruction.setForeground(MUTED);
+        card.add(instruction);
+        card.add(Box.createVerticalStrut(26));
+
+        receiveMessage.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        receiveMessage.setForeground(INK);
+        receiveProgress.setStringPainted(true);
+        receiveProgress.setString("");
+        receiveProgress.setForeground(GREEN);
+        receiveProgress.setBackground(new Color(232, 236, 246));
+        receiveProgress.setBorderPainted(false);
+        receiveProgress.setPreferredSize(new Dimension(640, 24));
+        receiveProgress.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+        receiveProgress.setVisible(false);
+        receiveMessage.setAlignmentX(Component.LEFT_ALIGNMENT);
+        receiveProgress.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(receiveMessage);
+        card.add(Box.createVerticalStrut(10));
+        card.add(receiveProgress);
+
+        JButton start = primaryButton("Start receiving");
+        start.setAlignmentX(Component.LEFT_ALIGNMENT);
+        start.addActionListener(event -> startPeerServices());
+        card.add(Box.createVerticalStrut(20));
+        card.add(start);
+
+        page.add(card, BorderLayout.NORTH);
         return page;
     }
 
@@ -483,11 +520,10 @@ public class Main extends JFrame {
         JButton browse = secondaryButton("Choose folder");
         browse.setAlignmentX(Component.LEFT_ALIGNMENT);
         browse.addActionListener(e -> {
-            JFileChooser chooser = styledFileChooser(downloads.toFile(), JFileChooser.DIRECTORIES_ONLY,
-                    "Choose a download folder", "Incoming files will be saved in this folder.");
-            chooser.setApproveButtonText("Use this folder");
-            if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-                downloads = chooser.getSelectedFile().toPath();
+            Path selected = choosePath(downloads.toFile(), JFileChooser.DIRECTORIES_ONLY,
+                    "Choose a download folder", "Incoming files will be saved in this folder.", "Use this folder");
+            if (selected != null) {
+                downloads = selected;
                 downloadPath.setText(downloads.toAbsolutePath().toString());
             }
         });
@@ -579,6 +615,14 @@ public class Main extends JFrame {
         if (key.equals("history")) filterHistory("");
     }
 
+    private void openSendPage() {
+        showPage("send", "Send files");
+    }
+
+    private void openReceivePage() {
+        if (startPeerServices()) showPage("receive", "Receive files");
+    }
+
     private boolean startPeerServices() {
         if (server != null && server.isRunning()) return true;
         try {
@@ -595,37 +639,19 @@ public class Main extends JFrame {
             } catch (Exception discoveryError) {
                 serverEvent("Device discovery unavailable: " + discoveryError.getMessage());
             }
-            status.setText("Group ready · port " + serverPort);
+            status.setText("Listening on port " + serverPort);
             status.setForeground(GREEN);
+            receiverPageStatus.setText("Listening on port " + serverPort);
+            receiverPageStatus.setForeground(GREEN);
+            receiverOverview.setText("Available to devices on the same Wi-Fi");
             return true;
         } catch (Exception ex) {
-            showMessage("Could not start group services: " + ex.getMessage());
+            showMessage("Could not start the receiver: " + ex.getMessage());
             return false;
         }
     }
 
-    private void createGroup() {
-        if (!startPeerServices()) return;
-        setupHint.setText("1. Open Windows Mobile hotspot settings.  2. Turn it on and have the other device join.");
-    }
-
-    private void joinGroup() {
-        if (!startPeerServices()) return;
-        openNetworkSettings("ms-settings:network-wifi",
-                "1. Join the host's hotspot.  2. Return here and choose Find devices.");
-    }
-
-    private void openNetworkSettings(String settingsUri, String instructions) {
-        setupHint.setText(instructions);
-        try {
-            if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(URI.create(settingsUri));
-            else throw new UnsupportedOperationException("Open Windows network settings manually.");
-        } catch (Exception ex) {
-            setupHint.setText("Open Windows Wi-Fi or Mobile hotspot settings, then follow the two steps.");
-        }
-    }
-
-    private void leaveGroup() {
+    private void stopPeerServices() {
         FileServer activeServer = server;
         server = null;
         if (activeServer != null) activeServer.stop();
@@ -638,14 +664,16 @@ public class Main extends JFrame {
             try { activeConnection.close(); }
             catch (Exception ex) { activity.append("Could not close peer connection: " + ex.getMessage() + "\n"); }
         }
-        status.setText("No active group");
+        status.setText("Receiver stopped");
         status.setForeground(MUTED);
+        receiverPageStatus.setText("Receiver stopped");
+        receiverPageStatus.setForeground(MUTED);
         clientCount.setText("0");
         receiveMessage.setText("Waiting for an incoming file");
+        receiverOverview.setText("Start receiving to accept files");
         receiveProgress.setValue(0);
         receiveProgress.setString("");
         receiveProgress.setVisible(false);
-        setupHint.setText("Choose Create Group or Join Group to get started.");
     }
 
     private void updateIncomingProgress(long received, long total) {
@@ -659,6 +687,7 @@ public class Main extends JFrame {
             receiveProgress.setString(percent + "%  ·  " + formatBytes(bytesPerSecond) + "/s");
             receiveMessage.setText("Receiving " + formatBytes(received) + " of " + formatBytes(total)
                     + "  ·  " + formatBytes(bytesPerSecond) + "/s");
+            receiverOverview.setText("Receiving a file · " + percent + "% complete");
         });
     }
 
@@ -672,28 +701,73 @@ public class Main extends JFrame {
                 receiveMessage.setText(event);
                 receiveProgress.setValue(100);
                 receiveProgress.setString("Complete");
+                receiverOverview.setText("File received successfully");
             }
             refreshHistory();
         });
     }
 
     private void chooseAndSend() {
-        JFileChooser chooser = styledFileChooser(downloads.toFile(), JFileChooser.FILES_ONLY,
-                "Choose a file to send", "Select one file. It will be sent over your local group.");
-        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) send(chooser.getSelectedFile().toPath());
+        Path selected = choosePath(downloads.toFile(), JFileChooser.FILES_ONLY,
+                "Choose a file to send", "Select one file to send over the same Wi-Fi network.", "Choose file");
+        if (selected != null) send(selected);
     }
 
-    private JFileChooser styledFileChooser(java.io.File directory, int selectionMode,
-                                            String title, String hint) {
+    private Path choosePath(java.io.File directory, int selectionMode, String title,
+                            String hint, String approveText) {
         JFileChooser chooser = new JFileChooser(directory);
         chooser.setDialogTitle(title);
-        chooser.setApproveButtonText("Choose file");
+        chooser.setApproveButtonText(approveText);
         chooser.setFileSelectionMode(selectionMode);
         chooser.setMultiSelectionEnabled(false);
         chooser.setPreferredSize(new Dimension(760, 500));
         chooser.setBackground(BACKGROUND);
         chooser.setAccessory(fileChooserHint(hint));
-        return chooser;
+        chooser.setControlButtonsAreShown(false);
+
+        Path[] chosenPath = new Path[1];
+        JDialog dialog = new JDialog(this, title, true);
+        dialog.setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        JPanel content = new JPanel(new BorderLayout(0, 14));
+        content.setBackground(Color.WHITE);
+        content.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(224, 229, 238)), new EmptyBorder(18, 20, 16, 20)));
+        content.add(sectionTitle(title, hint), BorderLayout.NORTH);
+        content.add(chooser, BorderLayout.CENTER);
+
+        JLabel selectionHint = new JLabel("Select an item to continue.");
+        selectionHint.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        selectionHint.setForeground(MUTED);
+        JPanel footer = new JPanel(new BorderLayout(12, 0));
+        footer.setOpaque(false);
+        footer.add(selectionHint, BorderLayout.CENTER);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.setOpaque(false);
+        JButton cancel = secondaryButton("Cancel");
+        cancel.addActionListener(event -> dialog.dispose());
+        JButton approve = primaryButton(approveText);
+        approve.addActionListener(event -> {
+            java.io.File selected = chooser.getSelectedFile();
+            boolean valid = selected != null && (selectionMode != JFileChooser.DIRECTORIES_ONLY || selected.isDirectory())
+                    && (selectionMode != JFileChooser.FILES_ONLY || selected.isFile());
+            if (!valid) {
+                selectionHint.setText(selectionMode == JFileChooser.DIRECTORIES_ONLY
+                        ? "Select a folder to continue." : "Select a file to continue.");
+                return;
+            }
+            chosenPath[0] = selected.toPath();
+            dialog.dispose();
+        });
+        buttons.add(cancel);
+        buttons.add(approve);
+        footer.add(buttons, BorderLayout.EAST);
+        content.add(footer, BorderLayout.SOUTH);
+        dialog.setContentPane(content);
+        dialog.setSize(850, 590);
+        dialog.setMinimumSize(new Dimension(760, 520));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+        return chosenPath[0];
     }
 
     private JPanel fileChooserHint(String message) {
@@ -726,7 +800,7 @@ public class Main extends JFrame {
                 scanButton.setText("Find devices");
                 discovered.forEach(deviceModel::addElement);
                 if (error != null) transferMessage.setText("Device search failed · " + error);
-                else if (discovered.isEmpty()) transferMessage.setText("No peers found · join the same hotspot group and try again");
+                else if (discovered.isEmpty()) transferMessage.setText("No peers found · check the same Wi-Fi connection and try again");
                 else transferMessage.setText("Found " + discovered.size() + " peer(s) · select one and connect");
             });
         });
@@ -853,7 +927,43 @@ public class Main extends JFrame {
         return String.format(Locale.ROOT, "%.1f GB", bytes / (1024.0 * 1024 * 1024));
     }
 
-    private void showMessage(String text) { JOptionPane.showMessageDialog(this, text == null ? "" : text); }
+    private void showMessage(String text) {
+        JDialog dialog = new JDialog(this, "ShareLAN", true);
+        dialog.setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+
+        JPanel content = new JPanel(new BorderLayout(0, 16));
+        content.setBackground(Color.WHITE);
+        content.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(224, 229, 238)), new EmptyBorder(22, 24, 20, 24)));
+        JLabel eyebrow = smallCaps("SHARELAN MESSAGE");
+        JLabel message = new JLabel("<html><div style='width:340px'>"
+                + escapeHtml(text == null ? "" : text).replace("\n", "<br>") + "</div></html>");
+        message.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        message.setForeground(INK);
+        JPanel copy = new JPanel();
+        copy.setOpaque(false);
+        copy.setLayout(new BoxLayout(copy, BoxLayout.Y_AXIS));
+        copy.add(eyebrow);
+        copy.add(Box.createVerticalStrut(9));
+        copy.add(message);
+        content.add(copy, BorderLayout.CENTER);
+
+        JButton close = primaryButton("Got it");
+        close.addActionListener(event -> dialog.dispose());
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        actions.setOpaque(false);
+        actions.add(close);
+        content.add(actions, BorderLayout.SOUTH);
+        dialog.setContentPane(content);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(420, dialog.getHeight()));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+    private String escapeHtml(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new Main().setVisible(true));
